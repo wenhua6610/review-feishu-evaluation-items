@@ -1,0 +1,4 @@
+interface:
+  display_name: "飞书评测题基础审查"
+  short_description: "递归读取飞书文档、链接、附件和压缩包，按最新规则审查评测题并生成整改话术"
+  default_prompt: "使用 $review-feishu-evaluation-items 审查这个飞书文档及其链接和附件，并生成整改话术。"
