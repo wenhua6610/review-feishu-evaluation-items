@@ -7,8 +7,32 @@
 ```json
 {
   "entry_url": "https://example.feishu.cn/docx/...",
+  "review_status": "completed",
   "material_completeness": "complete",
   "overall_decision": "fail",
+  "rule_understanding": {
+    "status": "ready",
+    "score": 96,
+    "threshold": 95,
+    "question_count": 1,
+    "dimensions": {
+      "authority_version": 20,
+      "scope_objects": 20,
+      "force_thresholds": 24,
+      "exceptions_conflicts": 18,
+      "evidence_delivery": 14
+    },
+    "critical_ambiguities": [],
+    "confirmed_points": ["V3及其正式补充说明生效"],
+    "unresolved_points": [],
+    "qa_log": [
+      {
+        "question": "原则上应提供解析是否属于阻断项？",
+        "answer": "不是阻断项，仅提示优化。",
+        "impact": "将该要求标准化为advisory"
+      }
+    ]
+  },
   "materials": [
     {
       "source_id": "SRC-001",
@@ -55,6 +79,8 @@
 
 允许增加字段，但不要删除上述必需字段。使用 `scripts/validate_review.py` 校验。
 
+`dimensions` 中保存的是加权后的分数，五项之和必须等于 `score`。`question_count` 不得超过 15。只有 `rule_understanding.status=ready`、`score>=95` 且 `critical_ambiguities` 为空时，`review_status` 才能为 `completed`。
+
 ## 对话输出
 
 严格按以下顺序输出；没有内容的部分写“无”，不要省略材料完整性和未读材料。
@@ -65,6 +91,7 @@
 ## 1. 总体结论
 - 结论：通过 / 不通过 / 待确认 / 无法审查
 - 材料完整性：完整 / 基本完整 / 不完整 / 无法审查
+- 规则理解度：96%（1/15问，关键歧义0项）
 - 适用规则版本：
 - 审查题目数：
 - 一句话说明：
@@ -134,3 +161,18 @@
 - 是否存在不影响结论的限制；
 - 当前范围内未发现违反强制规则的问题。
 
+## 规则理解未达标时
+
+不要输出逐题通过或不通过。只输出：
+
+```markdown
+# 审查暂未开始
+
+- 当前规则理解度：88%
+- 已提问：15/15
+- 审查门槛：95%
+- 已确认事项：
+- 未解决关键歧义：
+- 对结论的影响：
+- 下一步需要：规则负责人补充或确认的最小信息
+```
