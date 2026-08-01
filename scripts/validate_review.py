@@ -25,6 +25,15 @@ VALID_MATERIAL_STATUS = {
     "failed",
     "skipped_irrelevant",
 }
+VALID_REVIEW_STATUS = {"completed", "blocked_rule_understanding"}
+VALID_UNDERSTANDING_STATUS = {"ready", "blocked"}
+DIMENSION_KEYS = {
+    "authority_version",
+    "scope_objects",
+    "force_thresholds",
+    "exceptions_conflicts",
+    "evidence_delivery",
+}
 
 
 def nonempty(value: Any) -> bool:
@@ -39,8 +48,10 @@ def validate(data: Any) -> tuple[list[str], list[str]]:
 
     for field in (
         "entry_url",
+        "review_status",
         "material_completeness",
         "overall_decision",
+        "rule_understanding",
         "materials",
         "unread_materials",
         "rules",
@@ -51,12 +62,113 @@ def validate(data: Any) -> tuple[list[str], list[str]]:
 
     completeness = data.get("material_completeness")
     overall = data.get("overall_decision")
+    review_status = data.get("review_status")
+    if review_status not in VALID_REVIEW_STATUS:
+        errors.append(f"invalid review_status: {review_status!r}")
     if completeness not in VALID_COMPLETENESS:
         errors.append(f"invalid material_completeness: {completeness!r}")
     if overall not in VALID_DECISIONS:
         errors.append(f"invalid overall_decision: {overall!r}")
     if completeness in {"incomplete", "unreviewable"} and overall == "pass":
         errors.append("overall_decision cannot be pass when materials are incomplete")
+
+    understanding = data.get("rule_understanding")
+    understanding_ready = False
+    if not isinstance(understanding, dict):
+        errors.append("rule_understanding must be an object")
+        understanding = {}
+    else:
+        for field in (
+            "status",
+            "score",
+            "threshold",
+            "question_count",
+            "dimensions",
+            "critical_ambiguities",
+            "confirmed_points",
+            "unresolved_points",
+            "qa_log",
+        ):
+            if field not in understanding:
+                errors.append(f"rule_understanding missing field: {field}")
+        status = understanding.get("status")
+        score = understanding.get("score")
+        threshold = understanding.get("threshold")
+        question_count = understanding.get("question_count")
+        ambiguities = understanding.get("critical_ambiguities")
+        dimensions = understanding.get("dimensions")
+        qa_log = understanding.get("qa_log")
+        if status not in VALID_UNDERSTANDING_STATUS:
+            errors.append(f"invalid rule_understanding.status: {status!r}")
+        if not isinstance(score, int) or isinstance(score, bool) or not 0 <= score <= 100:
+            errors.append("rule_understanding.score must be an integer from 0 to 100")
+        if threshold != 95:
+            errors.append("rule_understanding.threshold must be 95")
+        if (
+            not isinstance(question_count, int)
+            or isinstance(question_count, bool)
+            or not 0 <= question_count <= 15
+        ):
+            errors.append("rule_understanding.question_count must be an integer from 0 to 15")
+        if not isinstance(ambiguities, list):
+            errors.append("rule_understanding.critical_ambiguities must be an array")
+            ambiguities = []
+        for field in ("confirmed_points", "unresolved_points"):
+            if not isinstance(understanding.get(field), list):
+                errors.append(f"rule_understanding.{field} must be an array")
+        if not isinstance(qa_log, list):
+            errors.append("rule_understanding.qa_log must be an array")
+            qa_log = []
+        if isinstance(question_count, int) and len(qa_log) != question_count:
+            errors.append("rule_understanding.qa_log length must equal question_count")
+        for index, entry in enumerate(qa_log):
+            if not isinstance(entry, dict):
+                errors.append(f"rule_understanding.qa_log[{index}] must be an object")
+                continue
+            for field in ("question", "answer", "impact"):
+                if not nonempty(entry.get(field)):
+                    errors.append(
+                        f"rule_understanding.qa_log[{index}].{field} must be a non-empty string"
+                    )
+        if not isinstance(dimensions, dict):
+            errors.append("rule_understanding.dimensions must be an object")
+        else:
+            if set(dimensions) != DIMENSION_KEYS:
+                errors.append("rule_understanding.dimensions has missing or unexpected keys")
+            dimension_score = 0
+            limits = {
+                "authority_version": 20,
+                "scope_objects": 20,
+                "force_thresholds": 25,
+                "exceptions_conflicts": 20,
+                "evidence_delivery": 15,
+            }
+            for key, limit in limits.items():
+                value = dimensions.get(key)
+                if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= limit:
+                    errors.append(f"rule_understanding.dimensions.{key} must be 0..{limit}")
+                else:
+                    dimension_score += value
+            if isinstance(score, int) and dimension_score != score:
+                errors.append("rule_understanding.score must equal the sum of dimensions")
+        understanding_ready = (
+            status == "ready"
+            and isinstance(score, int)
+            and score >= 95
+            and not ambiguities
+        )
+        if status == "ready" and not understanding_ready:
+            errors.append("ready rule understanding requires score >=95 and no critical ambiguities")
+        if status == "blocked" and isinstance(score, int) and score >= 95 and not ambiguities:
+            warnings.append("rule understanding is blocked although the numeric gate appears ready")
+
+    if review_status == "completed" and not understanding_ready:
+        errors.append("completed review requires rule understanding to pass the 95% gate")
+    if review_status == "blocked_rule_understanding":
+        if overall != "pending":
+            errors.append("blocked_rule_understanding requires overall_decision pending")
+        if understanding_ready:
+            errors.append("blocked_rule_understanding conflicts with a ready understanding gate")
 
     materials = data.get("materials", [])
     if not isinstance(materials, list):
@@ -114,9 +226,13 @@ def validate(data: Any) -> tuple[list[str], list[str]]:
                 errors.append(f"{prefix}.{field} must be a non-empty array")
 
     items = data.get("items", [])
-    if not isinstance(items, list) or not items:
-        errors.append("items must be a non-empty array")
+    if not isinstance(items, list):
+        errors.append("items must be an array")
         items = []
+    elif review_status == "completed" and not items:
+        errors.append("items must be non-empty for a completed review")
+    elif review_status == "blocked_rule_understanding" and items:
+        errors.append("items must stay empty when review is blocked by rule understanding")
     item_ids: set[str] = set()
     item_decisions: list[str] = []
     for item_index, item in enumerate(items):
@@ -191,7 +307,7 @@ def validate(data: Any) -> tuple[list[str], list[str]]:
         expected_overall = "pending"
     elif item_decisions:
         expected_overall = "pass"
-    if expected_overall and overall != expected_overall:
+    if review_status == "completed" and expected_overall and overall != expected_overall:
         errors.append(
             f"overall_decision {overall!r} conflicts with aggregated result {expected_overall!r}"
         )
